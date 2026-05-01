@@ -18,17 +18,22 @@ import {
   CandlestickChart,
   Coins,
   DollarSign,
+  Home,
   LineChart,
   PieChart,
   RefreshCw,
+  Search,
+  Settings,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Trophy,
   Wallet,
 } from 'lucide-react';
 
-const STARTING_CASH = 100000;
-const STORAGE_KEY = 'trade-trainer-v1';
+const DEFAULT_STARTING_CASH = 100000;
+const STORAGE_KEY = 'trade-trainer-v2';
+const OLD_STORAGE_KEY = 'trade-trainer-v1';
 
 const DEFAULT_ASSETS = [
   { id: 'apple', symbol: 'AAPL', name: 'Apple', type: 'stock', price: 271.35, change24h: 0.31, volatility: 0.012 },
@@ -46,6 +51,54 @@ const LESSONS = [
   'Good traders ask: what proves me wrong? Bad traders ask: how high can it go?',
   'Paper trading only works if you treat fake money like real money. No YOLO clown math.',
 ];
+
+const TABS = [
+  { id: 'home', label: 'Home', icon: Home },
+  { id: 'markets', label: 'Markets', icon: LineChart },
+  { id: 'trade', label: 'Trade', icon: CandlestickChart },
+  { id: 'journal', label: 'Journal', icon: BookOpen },
+  { id: 'settings', label: 'Settings', icon: Settings },
+];
+
+function createFreshState(startingCash = DEFAULT_STARTING_CASH) {
+  return {
+    startingCash,
+    cash: startingCash,
+    positions: {},
+    trades: [],
+    journal: [],
+  };
+}
+
+function normalizeState(saved) {
+  if (!saved) return createFreshState();
+  const startingCash = Number(saved.startingCash || DEFAULT_STARTING_CASH);
+  return {
+    startingCash,
+    cash: Number.isFinite(saved.cash) ? saved.cash : startingCash,
+    positions: saved.positions || {},
+    trades: saved.trades || [],
+    journal: saved.journal || [],
+  };
+}
+
+function loadState() {
+  try {
+    const savedV2 = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    if (savedV2) return normalizeState(savedV2);
+
+    const savedV1 = JSON.parse(localStorage.getItem(OLD_STORAGE_KEY));
+    if (savedV1) return normalizeState(savedV1);
+  } catch (error) {
+    console.warn('Could not load saved trading state', error);
+  }
+
+  return createFreshState();
+}
+
+function saveState(state) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
 
 function currency(value) {
   return new Intl.NumberFormat('en-US', {
@@ -79,21 +132,6 @@ function generateSeries(asset, points = 48) {
   return rows;
 }
 
-function loadState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved) return saved;
-  } catch (error) {
-    console.warn('Could not load saved trading state', error);
-  }
-
-  return { cash: STARTING_CASH, positions: {}, trades: [], journal: [] };
-}
-
-function saveState(state) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-}
-
 function nudgeAsset(asset) {
   const direction = Math.sin(Date.now() / 15000 + asset.symbol.length) * asset.volatility;
   return {
@@ -103,24 +141,32 @@ function nudgeAsset(asset) {
   };
 }
 
+function Card({ children, className = '' }) {
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`rounded-[1.75rem] border border-slate-800 bg-slate-950/80 p-5 shadow-2xl shadow-black/20 ${className}`}
+    >
+      {children}
+    </motion.section>
+  );
+}
+
 function StatCard({ icon: Icon, label, value, subtext }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="rounded-3xl border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20"
-    >
+    <Card className="p-4">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm text-slate-400">{label}</p>
-          <p className="mt-2 text-2xl font-bold tracking-tight text-white">{value}</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{label}</p>
+          <p className="mt-2 text-2xl font-black tracking-tight text-white">{value}</p>
           {subtext && <p className="mt-1 text-xs text-slate-500">{subtext}</p>}
         </div>
         <div className="rounded-2xl bg-emerald-400/10 p-3 text-emerald-300">
-          <Icon size={22} />
+          <Icon size={20} />
         </div>
       </div>
-    </motion.div>
+    </Card>
   );
 }
 
@@ -128,10 +174,54 @@ function Pill({ children, active, onClick }) {
   return (
     <button
       onClick={onClick}
-      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${active ? 'bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-400/20' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'}`}
+      className={`rounded-full px-4 py-2 text-sm font-bold transition ${active ? 'bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-400/20' : 'bg-slate-900 text-slate-300 hover:bg-slate-800'}`}
     >
       {children}
     </button>
+  );
+}
+
+function PriceChart({ data, selected }) {
+  return (
+    <div className="h-72 rounded-3xl bg-slate-900/70 p-3 md:h-96">
+      <ResponsiveContainer width="100%" height="100%">
+        <AreaChart data={data} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
+          <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} minTickGap={28} />
+          <YAxis domain={['dataMin', 'dataMax']} tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} width={58} />
+          <Tooltip contentStyle={{ background: '#020617', border: '1px solid #1e293b', borderRadius: 18 }} labelStyle={{ color: '#cbd5e1' }} formatter={(value) => [currency(value), 'Price']} />
+          <Area type="monotone" dataKey="price" stroke="currentColor" strokeWidth={3} fill="currentColor" fillOpacity={0.12} className={selected.change24h >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function Watchlist({ assets, selectedSymbol, onSelect }) {
+  return (
+    <div className="space-y-3">
+      {assets.map((asset) => {
+        const active = selectedSymbol === asset.symbol;
+        return (
+          <button
+            key={asset.symbol}
+            onClick={() => onSelect(asset.symbol)}
+            className={`w-full rounded-3xl border p-4 text-left transition ${active ? 'border-emerald-400/70 bg-emerald-400/10' : 'border-slate-800 bg-slate-900/60 hover:bg-slate-900'}`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-black text-white">{asset.symbol}</p>
+                <p className="text-sm text-slate-400">{asset.name}</p>
+              </div>
+              <div className="text-right">
+                <p className="font-bold text-white">{currency(asset.price)}</p>
+                <p className={`text-sm font-bold ${asset.change24h >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{percent(asset.change24h)}</p>
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -143,7 +233,10 @@ function App() {
   const [quantity, setQuantity] = useState('0.25');
   const [note, setNote] = useState('Breakout attempt with defined risk.');
   const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState('home');
+  const [capitalInput, setCapitalInput] = useState(String(state.startingCash));
 
   const selected = assets.find((asset) => asset.symbol === selectedSymbol) || assets[0];
 
@@ -178,7 +271,12 @@ function App() {
     }
   }
 
-  const filteredAssets = assets.filter((asset) => filter === 'all' || asset.type === filter);
+  const filteredAssets = assets.filter((asset) => {
+    const matchesType = filter === 'all' || asset.type === filter;
+    const matchesQuery = `${asset.symbol} ${asset.name}`.toLowerCase().includes(query.toLowerCase());
+    return matchesType && matchesQuery;
+  });
+
   const chartData = useMemo(() => generateSeries(selected), [selected]);
 
   const positionsValue = useMemo(() => Object.entries(state.positions).reduce((total, [symbol, position]) => {
@@ -187,14 +285,19 @@ function App() {
   }, 0), [assets, state.positions]);
 
   const equity = state.cash + positionsValue;
-  const profitLoss = equity - STARTING_CASH;
-  const profitLossPct = (profitLoss / STARTING_CASH) * 100;
+  const profitLoss = equity - state.startingCash;
+  const profitLossPct = state.startingCash > 0 ? (profitLoss / state.startingCash) * 100 : 0;
   const qty = Number(quantity) || 0;
   const tradeValue = qty * selected.price;
   const position = state.positions[selected.symbol] || { quantity: 0, avgPrice: 0 };
   const stopLoss = selected.price * 0.96;
   const estimatedRisk = Math.max(0, (selected.price - stopLoss) * qty);
   const lesson = LESSONS[Math.abs(selected.symbol.charCodeAt(0) + state.trades.length) % LESSONS.length];
+
+  function selectMarket(symbol) {
+    setSelectedSymbol(symbol);
+    setActiveTab('trade');
+  }
 
   function executeTrade() {
     if (qty <= 0) return;
@@ -234,216 +337,347 @@ function App() {
         ...current,
         cash: nextCash,
         positions: nextPositions,
-        trades: [trade, ...current.trades].slice(0, 50),
+        trades: [trade, ...current.trades].slice(0, 75),
         journal: note.trim()
-          ? [{ id: trade.id, symbol: selected.symbol, text: note.trim(), createdAt: trade.timestamp }, ...current.journal].slice(0, 20)
+          ? [{ id: trade.id, symbol: selected.symbol, text: note.trim(), createdAt: trade.timestamp }, ...current.journal].slice(0, 40)
           : current.journal,
       };
     });
   }
 
-  function resetAccount() {
-    const fresh = { cash: STARTING_CASH, positions: {}, trades: [], journal: [] };
+  function resetAccount(startingCash = state.startingCash) {
+    const amount = Math.max(100, Number(startingCash) || DEFAULT_STARTING_CASH);
+    const fresh = createFreshState(amount);
     setState(fresh);
+    setCapitalInput(String(amount));
     saveState(fresh);
   }
 
-  return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_32%),linear-gradient(135deg,_#020617,_#0f172a_50%,_#020617)] p-4 text-slate-100 md:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-5 rounded-[2rem] border border-slate-800 bg-slate-950/70 p-6 shadow-2xl shadow-black/30 backdrop-blur md:flex-row md:items-center md:justify-between">
+  function applyStartingCapital() {
+    resetAccount(capitalInput);
+    setActiveTab('home');
+  }
+
+  function renderHeader() {
+    return (
+      <header className="sticky top-0 z-20 -mx-4 border-b border-slate-800/80 bg-slate-950/90 px-4 py-4 backdrop-blur-xl md:-mx-8 md:px-8">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
           <div>
-            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-sm font-semibold text-emerald-200">
-              <Sparkles size={16} /> Paper trading lab
+            <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 text-xs font-bold text-emerald-200">
+              <Sparkles size={14} /> Paper trading lab
             </div>
-            <h1 className="text-3xl font-black tracking-tight text-white md:text-5xl">TradeTrainer</h1>
-            <p className="mt-2 max-w-2xl text-slate-400">
-              Practice entries, exits, sizing, and journaling without donating your paycheck to the market goblin.
-            </p>
+            <h1 className="text-2xl font-black tracking-tight text-white md:text-4xl">TradeTrainer</h1>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <button onClick={refreshCryptoPrices} className="inline-flex items-center gap-2 rounded-2xl bg-slate-800 px-4 py-3 font-bold text-white hover:bg-slate-700">
-              <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} /> Refresh
-            </button>
-            <button onClick={resetAccount} className="rounded-2xl border border-slate-700 px-4 py-3 font-bold text-slate-200 hover:bg-slate-900">
-              Reset paper account
-            </button>
+          <button onClick={refreshCryptoPrices} className="inline-flex items-center gap-2 rounded-2xl bg-slate-800 px-3 py-3 font-bold text-white hover:bg-slate-700">
+            <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+        </div>
+      </header>
+    );
+  }
+
+  function renderStats() {
+    return (
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard icon={Wallet} label="Equity" value={currency(equity)} subtext="Cash + open positions" />
+        <StatCard icon={DollarSign} label="Cash" value={currency(state.cash)} subtext="Available paper balance" />
+        <StatCard icon={PieChart} label="Positions" value={currency(positionsValue)} subtext="Marked to market" />
+        <StatCard icon={profitLoss >= 0 ? ArrowUpRight : ArrowDownRight} label="Total P/L" value={`${currency(profitLoss)} (${percent(profitLossPct)})`} subtext={`Start: ${currency(state.startingCash)}`} />
+      </section>
+    );
+  }
+
+  function renderMarketCard() {
+    return (
+      <Card>
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-slate-500">Selected market</p>
+            <h2 className="mt-1 text-3xl font-black text-white">{selected.name} <span className="text-slate-500">{selected.symbol}</span></h2>
+            <p className="mt-2 text-slate-400">Current quote: <span className="font-bold text-white">{currency(selected.price)}</span></p>
           </div>
-        </header>
+          <div className={`rounded-2xl px-4 py-3 font-black ${selected.change24h >= 0 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300'}`}>
+            {selected.change24h >= 0 ? <ArrowUpRight className="inline" size={18} /> : <ArrowDownRight className="inline" size={18} />} {percent(selected.change24h)}
+          </div>
+        </div>
+        <PriceChart data={chartData} selected={selected} />
+      </Card>
+    );
+  }
 
-        <section className="grid gap-4 md:grid-cols-4">
-          <StatCard icon={Wallet} label="Account equity" value={currency(equity)} subtext="Cash + open positions" />
-          <StatCard icon={DollarSign} label="Available cash" value={currency(state.cash)} subtext="Paper balance" />
-          <StatCard icon={PieChart} label="Positions value" value={currency(positionsValue)} subtext="Marked to market" />
-          <StatCard icon={profitLoss >= 0 ? ArrowUpRight : ArrowDownRight} label="Total P/L" value={`${currency(profitLoss)} (${percent(profitLossPct)})`} subtext="Since account start" />
-        </section>
+  function renderOrderTicket() {
+    return (
+      <Card>
+        <h2 className="flex items-center gap-2 text-xl font-black text-white"><Coins size={21} /> Order ticket</h2>
+        <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl bg-slate-900 p-1">
+          <button onClick={() => setSide('buy')} className={`rounded-xl py-3 font-black ${side === 'buy' ? 'bg-emerald-400 text-slate-950' : 'text-slate-400'}`}>Buy</button>
+          <button onClick={() => setSide('sell')} className={`rounded-xl py-3 font-black ${side === 'sell' ? 'bg-rose-400 text-slate-950' : 'text-slate-400'}`}>Sell</button>
+        </div>
 
-        <main className="grid gap-6 lg:grid-cols-[1.05fr_1.7fr_0.95fr]">
-          <aside className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-            <h2 className="mb-4 flex items-center gap-2 text-xl font-black text-white"><LineChart size={21} /> Watchlist</h2>
-            <div className="mb-4 flex gap-2">
-              <Pill active={filter === 'all'} onClick={() => setFilter('all')}>All</Pill>
-              <Pill active={filter === 'stock'} onClick={() => setFilter('stock')}>Stocks</Pill>
-              <Pill active={filter === 'crypto'} onClick={() => setFilter('crypto')}>Crypto</Pill>
-            </div>
-            <div className="space-y-3">
-              {filteredAssets.map((asset) => {
-                const active = selected.symbol === asset.symbol;
+        <label className="mt-5 block text-sm font-bold text-slate-300">Quantity</label>
+        <input value={quantity} onChange={(event) => setQuantity(event.target.value)} className="mt-2 w-full rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-lg font-bold text-white outline-none focus:border-emerald-400" inputMode="decimal" />
+
+        <label className="mt-5 block text-sm font-bold text-slate-300">Trade thesis / journal</label>
+        <textarea value={note} onChange={(event) => setNote(event.target.value)} className="mt-2 min-h-28 w-full rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-white outline-none focus:border-emerald-400" />
+
+        <div className="mt-5 rounded-3xl bg-slate-900/70 p-4 text-sm text-slate-300">
+          <div className="flex justify-between"><span>Market</span><strong>{selected.symbol}</strong></div>
+          <div className="mt-2 flex justify-between"><span>Price</span><strong>{currency(selected.price)}</strong></div>
+          <div className="mt-2 flex justify-between"><span>Trade value</span><strong>{currency(tradeValue)}</strong></div>
+          <div className="mt-2 flex justify-between"><span>Est. 4% risk</span><strong>{currency(estimatedRisk)}</strong></div>
+        </div>
+
+        <button onClick={executeTrade} className={`mt-5 w-full rounded-2xl py-4 text-lg font-black shadow-xl transition ${side === 'buy' ? 'bg-emerald-400 text-slate-950 shadow-emerald-400/20 hover:bg-emerald-300' : 'bg-rose-400 text-slate-950 shadow-rose-400/20 hover:bg-rose-300'}`}>
+          Place paper {side}
+        </button>
+      </Card>
+    );
+  }
+
+  function renderPositions() {
+    return (
+      <Card>
+        <h2 className="flex items-center gap-2 text-xl font-black text-white"><BarChart3 size={21} /> Open positions</h2>
+        <div className="mt-4 overflow-hidden rounded-3xl border border-slate-800">
+          <table className="w-full text-left text-xs sm:text-sm">
+            <thead className="bg-slate-900 text-slate-400">
+              <tr><th className="p-3 sm:p-4">Asset</th><th className="p-3 sm:p-4">Qty</th><th className="p-3 sm:p-4">Value</th><th className="p-3 sm:p-4">P/L</th></tr>
+            </thead>
+            <tbody>
+              {Object.entries(state.positions).length === 0 ? (
+                <tr><td className="p-4 text-slate-500" colSpan="4">No open positions.</td></tr>
+              ) : Object.entries(state.positions).map(([symbol, pos]) => {
+                const asset = assets.find((item) => item.symbol === symbol);
+                const value = (asset?.price || 0) * pos.quantity;
+                const pnl = value - pos.avgPrice * pos.quantity;
                 return (
-                  <button key={asset.symbol} onClick={() => setSelectedSymbol(asset.symbol)} className={`w-full rounded-3xl border p-4 text-left transition ${active ? 'border-emerald-400/70 bg-emerald-400/10' : 'border-slate-800 bg-slate-900/60 hover:bg-slate-900'}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-white">{asset.symbol}</p>
-                        <p className="text-sm text-slate-400">{asset.name}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-bold text-white">{currency(asset.price)}</p>
-                        <p className={`text-sm font-bold ${asset.change24h >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{percent(asset.change24h)}</p>
-                      </div>
-                    </div>
-                  </button>
+                  <tr key={symbol} className="border-t border-slate-800">
+                    <td className="p-3 font-black text-white sm:p-4">{symbol}</td>
+                    <td className="p-3 text-slate-300 sm:p-4">{pos.quantity.toFixed(4)}</td>
+                    <td className="p-3 text-slate-300 sm:p-4">{currency(value)}</td>
+                    <td className={`p-3 font-black sm:p-4 ${pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{currency(pnl)}</td>
+                  </tr>
                 );
               })}
-            </div>
-          </aside>
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    );
+  }
 
-          <section className="space-y-6">
-            <div className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-              <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+  function renderRecentTrades() {
+    return (
+      <Card>
+        <h2 className="flex items-center gap-2 text-xl font-black text-white"><Trophy size={21} /> Recent trades</h2>
+        <div className="mt-4 space-y-3">
+          {state.trades.length === 0 ? (
+            <p className="rounded-2xl bg-slate-900 p-4 text-sm text-slate-400">No trades yet. Make one and write a thesis. No thesis, no trade. That is the house rule.</p>
+          ) : state.trades.slice(0, 12).map((trade) => (
+            <div key={trade.id} className="rounded-2xl bg-slate-900 p-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm uppercase tracking-[0.3em] text-slate-500">Selected market</p>
-                  <h2 className="mt-1 text-3xl font-black text-white">{selected.name} <span className="text-slate-500">{selected.symbol}</span></h2>
-                  <p className="mt-2 text-slate-400">Current quote: <span className="font-bold text-white">{currency(selected.price)}</span></p>
+                  <p className="font-black text-white"><span className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>{trade.side.toUpperCase()}</span> {trade.symbol}</p>
+                  <p className="text-xs text-slate-500">{new Date(trade.timestamp).toLocaleString()}</p>
                 </div>
-                <div className={`rounded-2xl px-4 py-3 font-black ${selected.change24h >= 0 ? 'bg-emerald-400/10 text-emerald-300' : 'bg-rose-400/10 text-rose-300'}`}>
-                  {selected.change24h >= 0 ? <ArrowUpRight className="inline" size={18} /> : <ArrowDownRight className="inline" size={18} />} {percent(selected.change24h)}
+                <p className="font-bold text-white">{currency(trade.value)}</p>
+              </div>
+              <p className="mt-2 text-sm text-slate-400">{trade.quantity} @ {currency(trade.price)}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+    );
+  }
+
+  function renderJournal() {
+    return (
+      <Card>
+        <h2 className="flex items-center gap-2 text-xl font-black text-white"><BookOpen size={21} /> Trade journal</h2>
+        <div className="mt-4 space-y-3">
+          {state.journal.length === 0 ? (
+            <p className="rounded-2xl bg-slate-900 p-4 text-sm text-slate-400">Journal entries appear here after each trade. Future version: score entries, exits, risk, and discipline.</p>
+          ) : state.journal.map((entry) => (
+            <div key={entry.id} className="rounded-2xl bg-slate-900 p-4">
+              <p className="font-black text-white">{entry.symbol}</p>
+              <p className="mt-1 text-sm leading-6 text-slate-300">{entry.text}</p>
+              <p className="mt-2 text-xs text-slate-500">{new Date(entry.createdAt).toLocaleString()}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+    );
+  }
+
+  function renderHome() {
+    return (
+      <div className="space-y-5">
+        {renderStats()}
+        <div className="grid gap-5 xl:grid-cols-[1.5fr_1fr]">
+          {renderMarketCard()}
+          <div className="space-y-5">
+            <Card>
+              <h2 className="flex items-center gap-2 text-xl font-black text-white"><Brain size={21} /> Coach note</h2>
+              <p className="mt-3 text-sm leading-6 text-slate-300">{lesson}</p>
+            </Card>
+            <Card>
+              <h2 className="flex items-center gap-2 text-xl font-black text-white"><ShieldCheck size={21} /> Risk snapshot</h2>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-slate-900 p-4">
+                  <p className="text-xs text-slate-500">Est. 4% risk</p>
+                  <p className="mt-1 text-xl font-black text-white">{currency(estimatedRisk)}</p>
+                </div>
+                <div className="rounded-2xl bg-slate-900 p-4">
+                  <p className="text-xs text-slate-500">Owned</p>
+                  <p className="mt-1 text-xl font-black text-white">{position.quantity.toFixed(4)}</p>
                 </div>
               </div>
-
-              <div className="h-80 rounded-3xl bg-slate-900/70 p-4">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.12)" />
-                    <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} />
-                    <YAxis domain={['dataMin', 'dataMax']} tick={{ fill: '#94a3b8', fontSize: 12 }} axisLine={false} tickLine={false} width={70} />
-                    <Tooltip contentStyle={{ background: '#020617', border: '1px solid #1e293b', borderRadius: 18 }} labelStyle={{ color: '#cbd5e1' }} formatter={(value) => [currency(value), 'Price']} />
-                    <Area type="monotone" dataKey="price" stroke="currentColor" strokeWidth={3} fill="currentColor" fillOpacity={0.12} className={selected.change24h >= 0 ? 'text-emerald-300' : 'text-rose-300'} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-3xl border border-slate-800 bg-slate-950/75 p-5">
-                <h3 className="flex items-center gap-2 font-black text-white"><ShieldCheck size={19} /> Risk box</h3>
-                <p className="mt-3 text-sm text-slate-400">Estimated 4% stop loss</p>
-                <p className="mt-1 text-2xl font-black text-white">{currency(estimatedRisk)}</p>
-              </div>
-              <div className="rounded-3xl border border-slate-800 bg-slate-950/75 p-5">
-                <h3 className="flex items-center gap-2 font-black text-white"><CandlestickChart size={19} /> Position</h3>
-                <p className="mt-3 text-sm text-slate-400">Owned shares/coins</p>
-                <p className="mt-1 text-2xl font-black text-white">{position.quantity.toFixed(4)}</p>
-              </div>
-              <div className="rounded-3xl border border-slate-800 bg-slate-950/75 p-5">
-                <h3 className="flex items-center gap-2 font-black text-white"><Brain size={19} /> Coach note</h3>
-                <p className="mt-3 text-sm leading-6 text-slate-300">{lesson}</p>
-              </div>
-            </div>
-          </section>
-
-          <aside className="space-y-6">
-            <section className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-              <h2 className="flex items-center gap-2 text-xl font-black text-white"><Coins size={21} /> Order ticket</h2>
-              <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl bg-slate-900 p-1">
-                <button onClick={() => setSide('buy')} className={`rounded-xl py-3 font-black ${side === 'buy' ? 'bg-emerald-400 text-slate-950' : 'text-slate-400'}`}>Buy</button>
-                <button onClick={() => setSide('sell')} className={`rounded-xl py-3 font-black ${side === 'sell' ? 'bg-rose-400 text-slate-950' : 'text-slate-400'}`}>Sell</button>
-              </div>
-
-              <label className="mt-5 block text-sm font-bold text-slate-300">Quantity</label>
-              <input value={quantity} onChange={(event) => setQuantity(event.target.value)} className="mt-2 w-full rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-lg font-bold text-white outline-none focus:border-emerald-400" inputMode="decimal" />
-
-              <label className="mt-5 block text-sm font-bold text-slate-300">Trade thesis / journal</label>
-              <textarea value={note} onChange={(event) => setNote(event.target.value)} className="mt-2 min-h-28 w-full rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-sm text-white outline-none focus:border-emerald-400" />
-
-              <div className="mt-5 rounded-3xl bg-slate-900/70 p-4 text-sm text-slate-300">
-                <div className="flex justify-between"><span>Market</span><strong>{selected.symbol}</strong></div>
-                <div className="mt-2 flex justify-between"><span>Price</span><strong>{currency(selected.price)}</strong></div>
-                <div className="mt-2 flex justify-between"><span>Trade value</span><strong>{currency(tradeValue)}</strong></div>
-              </div>
-
-              <button onClick={executeTrade} className={`mt-5 w-full rounded-2xl py-4 text-lg font-black shadow-xl transition ${side === 'buy' ? 'bg-emerald-400 text-slate-950 shadow-emerald-400/20 hover:bg-emerald-300' : 'bg-rose-400 text-slate-950 shadow-rose-400/20 hover:bg-rose-300'}`}>
-                Place paper {side}
-              </button>
-            </section>
-
-            <section className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-              <h2 className="flex items-center gap-2 text-xl font-black text-white"><Trophy size={21} /> Recent trades</h2>
-              <div className="mt-4 max-h-80 space-y-3 overflow-auto pr-1">
-                {state.trades.length === 0 ? (
-                  <p className="rounded-2xl bg-slate-900 p-4 text-sm text-slate-400">No trades yet. Make one and write a thesis. No thesis, no trade. That is the house rule.</p>
-                ) : state.trades.map((trade) => (
-                  <div key={trade.id} className="rounded-2xl bg-slate-900 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-black text-white"><span className={trade.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}>{trade.side.toUpperCase()}</span> {trade.symbol}</p>
-                        <p className="text-xs text-slate-500">{new Date(trade.timestamp).toLocaleString()}</p>
-                      </div>
-                      <p className="font-bold text-white">{currency(trade.value)}</p>
-                    </div>
-                    <p className="mt-2 text-sm text-slate-400">{trade.quantity} @ {currency(trade.price)}</p>
-                  </div>
-                ))}
-              </div>
-            </section>
-          </aside>
-        </main>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-            <h2 className="flex items-center gap-2 text-xl font-black text-white"><BarChart3 size={21} /> Open positions</h2>
-            <div className="mt-4 overflow-hidden rounded-3xl border border-slate-800">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-900 text-slate-400">
-                  <tr><th className="p-4">Asset</th><th className="p-4">Qty</th><th className="p-4">Avg</th><th className="p-4">Value</th><th className="p-4">P/L</th></tr>
-                </thead>
-                <tbody>
-                  {Object.entries(state.positions).length === 0 ? (
-                    <tr><td className="p-4 text-slate-500" colSpan="5">No open positions.</td></tr>
-                  ) : Object.entries(state.positions).map(([symbol, pos]) => {
-                    const asset = assets.find((item) => item.symbol === symbol);
-                    const value = (asset?.price || 0) * pos.quantity;
-                    const pnl = value - pos.avgPrice * pos.quantity;
-                    return (
-                      <tr key={symbol} className="border-t border-slate-800">
-                        <td className="p-4 font-black text-white">{symbol}</td>
-                        <td className="p-4 text-slate-300">{pos.quantity.toFixed(4)}</td>
-                        <td className="p-4 text-slate-300">{currency(pos.avgPrice)}</td>
-                        <td className="p-4 text-slate-300">{currency(value)}</td>
-                        <td className={`p-4 font-black ${pnl >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{currency(pnl)}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+            </Card>
           </div>
-
-          <div className="rounded-[2rem] border border-slate-800 bg-slate-950/75 p-5 shadow-2xl shadow-black/20">
-            <h2 className="flex items-center gap-2 text-xl font-black text-white"><BookOpen size={21} /> Trade journal</h2>
-            <div className="mt-4 space-y-3">
-              {state.journal.length === 0 ? (
-                <p className="rounded-2xl bg-slate-900 p-4 text-sm text-slate-400">Journal entries appear here after each trade. Future version: score entries, exits, risk, and discipline.</p>
-              ) : state.journal.map((entry) => (
-                <div key={entry.id} className="rounded-2xl bg-slate-900 p-4">
-                  <p className="font-black text-white">{entry.symbol}</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-300">{entry.text}</p>
-                  <p className="mt-2 text-xs text-slate-500">{new Date(entry.createdAt).toLocaleString()}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
+    );
+  }
+
+  function renderMarkets() {
+    return (
+      <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
+        <Card>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <h2 className="flex items-center gap-2 text-xl font-black text-white"><LineChart size={21} /> Markets</h2>
+          </div>
+          <div className="mb-4 flex items-center gap-3 rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3">
+            <Search size={18} className="text-slate-500" />
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search ticker or name" className="w-full bg-transparent text-sm font-semibold text-white outline-none placeholder:text-slate-500" />
+          </div>
+          <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+            <Pill active={filter === 'all'} onClick={() => setFilter('all')}>All</Pill>
+            <Pill active={filter === 'stock'} onClick={() => setFilter('stock')}>Stocks</Pill>
+            <Pill active={filter === 'crypto'} onClick={() => setFilter('crypto')}>Crypto</Pill>
+          </div>
+          <Watchlist assets={filteredAssets} selectedSymbol={selectedSymbol} onSelect={selectMarket} />
+        </Card>
+        {renderPositions()}
+      </div>
+    );
+  }
+
+  function renderTrade() {
+    return (
+      <div className="grid gap-5 xl:grid-cols-[1.45fr_0.95fr]">
+        <div className="space-y-5">
+          {renderMarketCard()}
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Card>
+              <h3 className="flex items-center gap-2 font-black text-white"><ShieldCheck size={19} /> Risk box</h3>
+              <p className="mt-3 text-sm text-slate-400">Estimated 4% stop loss</p>
+              <p className="mt-1 text-2xl font-black text-white">{currency(estimatedRisk)}</p>
+            </Card>
+            <Card>
+              <h3 className="flex items-center gap-2 font-black text-white"><CandlestickChart size={19} /> Position</h3>
+              <p className="mt-3 text-sm text-slate-400">Owned shares/coins</p>
+              <p className="mt-1 text-2xl font-black text-white">{position.quantity.toFixed(4)}</p>
+            </Card>
+          </div>
+        </div>
+        {renderOrderTicket()}
+      </div>
+    );
+  }
+
+  function renderJournalScreen() {
+    return (
+      <div className="grid gap-5 xl:grid-cols-2">
+        {renderRecentTrades()}
+        {renderJournal()}
+      </div>
+    );
+  }
+
+  function renderSettings() {
+    return (
+      <div className="mx-auto max-w-3xl space-y-5">
+        <Card>
+          <h2 className="flex items-center gap-2 text-xl font-black text-white"><SlidersHorizontal size={21} /> Account settings</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-400">
+            Change your starting paper capital. Applying this resets cash, positions, trades, and journal so your P/L starts clean.
+          </p>
+          <label className="mt-5 block text-sm font-bold text-slate-300">Starting capital</label>
+          <div className="mt-2 flex gap-3">
+            <input
+              value={capitalInput}
+              onChange={(event) => setCapitalInput(event.target.value)}
+              className="w-full rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 text-lg font-black text-white outline-none focus:border-emerald-400"
+              inputMode="decimal"
+              placeholder="100000"
+            />
+            <button onClick={applyStartingCapital} className="rounded-2xl bg-emerald-400 px-5 py-3 font-black text-slate-950 shadow-xl shadow-emerald-400/20 hover:bg-emerald-300">
+              Apply
+            </button>
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            {[1000, 10000, 100000].map((amount) => (
+              <button key={amount} onClick={() => setCapitalInput(String(amount))} className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3 font-bold text-slate-200 hover:bg-slate-800">
+                {currency(amount)}
+              </button>
+            ))}
+          </div>
+        </Card>
+
+        <Card>
+          <h2 className="flex items-center gap-2 text-xl font-black text-white"><Wallet size={21} /> Current account</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl bg-slate-900 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Starting capital</p>
+              <p className="mt-1 text-2xl font-black text-white">{currency(state.startingCash)}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-900 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Current equity</p>
+              <p className="mt-1 text-2xl font-black text-white">{currency(equity)}</p>
+            </div>
+          </div>
+          <button onClick={() => resetAccount(state.startingCash)} className="mt-5 w-full rounded-2xl border border-rose-400/40 bg-rose-400/10 px-4 py-4 font-black text-rose-200 hover:bg-rose-400/20">
+            Reset account with current starting capital
+          </button>
+        </Card>
+      </div>
+    );
+  }
+
+  function renderActiveTab() {
+    if (activeTab === 'markets') return renderMarkets();
+    if (activeTab === 'trade') return renderTrade();
+    if (activeTab === 'journal') return renderJournalScreen();
+    if (activeTab === 'settings') return renderSettings();
+    return renderHome();
+  }
+
+  return (
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_32%),linear-gradient(135deg,_#020617,_#0f172a_50%,_#020617)] text-slate-100">
+      {renderHeader()}
+      <main className="mx-auto max-w-7xl px-4 pb-28 pt-5 md:px-8">
+        {renderActiveTab()}
+      </main>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-30 border-t border-slate-800 bg-slate-950/95 px-2 pb-3 pt-2 backdrop-blur-xl">
+        <div className="mx-auto grid max-w-2xl grid-cols-5 gap-1">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-2xl px-2 py-2 text-xs font-bold transition ${active ? 'bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-400/20' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}
+              >
+                <Icon size={20} className="mx-auto" />
+                <span className="mt-1 block">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
